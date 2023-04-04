@@ -1,0 +1,87 @@
+---
+title: "ECO374_PS3"
+author: "Shih-Chieh Lee"
+date: "2023-03-29"
+output: pdf_document
+---
+
+Install and load required packages
+```{r, message=FALSE}
+library(quantmod) # functions: getSymbols
+library(ggplot2)  # functions: ggplot
+library(rugarch)  # functions: ugarchspec
+library(rmgarch)  # functions: dccspec, dccfit, dccforecast
+library(timetk)   # functions: tk_index, tk_make_future_timeseries
+library(xts)      # functions: xts
+library(forecast) # functions: auto.arima
+```
+
+# 1. Data
+
+Data: NASDAQ Composite Index (daily close price), source: [https://finance.yahoo.com/quote/%5EIXIC/history?period1=34560000&period2=1680048000&interval=1d&filter=history&frequency=1d&includeAdjustedClose=true]
+```{r, message=FALSE, warning=FALSE}
+table <- read.csv(file = "^IXIC.csv", header =TRUE, sep = ",")
+ind <- as.Date(table$Date, format="%Y-%m-%d")
+table <- subset(table, select=-c(Date))
+NASDAQ <- xts(x=table, order.by=ind)
+start_date <- as.Date("2010-01-01")
+IXIC <- subset(NASDAQ, ind >= start_date)
+colnames(IXIC) <- "NASDAQ_Index"
+IXIC_r <- na.omit(diff(log(IXIC)))
+```
+
+
+# 2. ARMA(1,1)-GARCH(1,1) model specification
+```{r}
+model <- ugarchspec(variance.model = list(model="sGARCH", garchOrder=c(1, 1)), 
+                   mean.model = list(armaOrder=c(1, 1)))
+model
+```
+
+Estimate the model
+```{r}
+model_fit <- ugarchfit(spec=model, data=IXIC_r)
+```
+
+
+# 3. Forecast: Value at Risk (VaR)
+
+Forecast the position in the Index for the next 8 days
+```{r}
+n.future <- 8 #set the range of forecast to 8 days
+model_forecast <- ugarchforecast(fit=model_fit, n.ahead=n.future)
+id <- tk_index(IXIC_r)
+id.f <- tk_make_future_timeseries(id, length_out=n.future, inspect_weekdays=TRUE)
+```
+
+VaR at $\alpha = 1\%$ for a $50,000 position in NASDAQ Composite Index
+```{r, fig.width=7, fig.height=3}
+f_mean <- as.numeric(model_forecast@forecast$seriesFor)
+f_std <- as.numeric(model_forecast@forecast$sigmaFor)
+VaR_f <- 50000*abs(f_mean-2.33*f_std) 
+VaR_f <- xts(VaR_f, order.by=id.f)
+colnames(VaR_f) <- "VaR"
+
+ggplot(data=VaR_f, aes(x=index(VaR_f), y=VaR)) + 
+  geom_line(color="deeppink4") + 
+  geom_point(color="deeppink4") +
+  labs(x="Date", y="", title="Forecast of Value at Risk for a $50,000 position in NASDAQ Composite Index") +
+  theme_minimal() + scale_x_date(date_breaks="1 day", date_labels = "%b %d") +
+  theme(plot.title = element_text(size=10)) 
+```
+
+# 4. Forecast: Expected Shortfall
+
+Expected Shortfall at $\alpha=1\%$ for a $50,000 position in NASDAQ Composite Index
+```{r, fig.width=7, fig.height=3}
+ES <- 50000*abs(f_mean-2.64*f_std)
+ES <- xts(ES, order.by=id.f)
+colnames(ES) <- "es"
+
+ggplot(data=ES, aes(x=index(ES), y=es)) + 
+  geom_line(color="springgreen4") + 
+  geom_point(color="springgreen4") +
+  labs(x="Date", y="", title="Expected Shortfall for a $50,000 position in NASDAQ Composite Index") +
+  theme_minimal() + scale_x_date(date_breaks="1 day", date_labels = "%b %d") +
+  theme(plot.title = element_text(size=10))
+```
